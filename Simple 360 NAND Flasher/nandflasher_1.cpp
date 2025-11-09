@@ -360,7 +360,7 @@ void PrintConsoleInfo(bool GotKey)
 {
 	dprintf(MSG_CONSOLE_INFO_LINE);
 	PrintDash();
-	PrintDLVersion();
+    PrintConsoleType();
 	if (GotKey)
 		PrintCPUKey();
 	if (GotSerial)
@@ -392,20 +392,153 @@ bool CheckGameMounted() {
 	return true;
 }
 
+int bytesToUint32(unsigned char * data, int offset)
+{
+	return *(int *)(data + offset);
+}
+
+
+int patch_raw_kv_pages(char * flashdmp, char * updflash)
+{
+	int rc = 0;
+	int kvSize = 0;
+	int kvOffset = 0;
+	int pageCount = 0;
+
+	int kvOffsetPhys = 0;
+	int kvOffsetInPage = 0;
+	int kvSizePhys = 0;
+
+	// Sanity check when copying pages to the new image
+	int kvOffsetUpdflash = 0;
+	int kvSizeUpdflash = 0;
+
+	unsigned char kvBuf[0x4200] = {'\0'};
+
+	FILE *fd;
+
+	if (fopen_s(&fd, flashdmp, "rb") != 0)
+	{		
+		dprintf(MSG_ERROR MSG_UNABLE_TO_OPEN_FOR_READING, flashdmp);
+		return -1;
+	}
+
+	// KV size is stored at 0x60 in NAND, it's the first page so
+	// we don't need to account for SPARE data
+	fseek(fd,0x60,SEEK_SET);
+
+	if (fread_s(&kvSize, sizeof(kvSize), sizeof(kvSize), 1, fd) != 1)
+	{
+		dprintf("Couldn't read KV size from %s", flashdmp);
+		fclose(fd);
+		return -1;
+	}
+
+	fseek(fd,0x6C,SEEK_SET);
+
+	if (fread_s(&kvOffset, sizeof(kvOffset), sizeof(kvOffset), 1, fd) != 1)
+	{
+		dprintf("Couldn't read KV offset from %s", flashdmp);
+		fclose(fd);
+		return -1;
+	}
+
+	dprintf("KV size: 0x%x\nKV offset: 0x%x",kvSize,kvOffset);
+
+	// KV size in NAND is logical, without spare data
+	pageCount = kvSize / 0x200;
+	kvSizePhys = pageCount * 0x210;
+
+	if(sizeof(kvBuf) < kvSizePhys)
+	{
+		dprintf("Error: KV size in NAND is larger than dataBufSz!");
+		fclose(fd);
+		return -1;
+	}
+
+	kvOffsetInPage = kvOffset % 0x200;
+
+	if(0 != kvOffsetInPage)
+	{
+		dprintf("Error: KV is not on a page boundary!");
+		fclose(fd);
+		return -1;
+	}
+
+	kvOffsetPhys = (kvOffset / 0x200) * 0x210;
+
+	fseek(fd,kvOffsetPhys,SEEK_SET);
+
+	if (fread_s(&kvBuf, sizeof(kvBuf),kvSizePhys,1,fd) != 1)
+	{
+		dprintf("Couldn't read KV from %s", flashdmp);
+		fclose(fd);
+		return -1;
+	}
+
+	// Presumably we've read the KV. Now we've got to patch the new image
+	fclose(fd);
+
+	if (fopen_s(&fd, updflash, "rb+") != 0)
+	{		
+		dprintf(MSG_ERROR MSG_UNABLE_TO_OPEN_FOR_WRITING, updflash);
+		return -1;
+	}
+
+	// KV size is stored at 0x60 in NAND, it's the first page so
+	// we don't need to account for SPARE data
+	fseek(fd,0x60,SEEK_SET);
+
+	if (fread_s(&kvSizeUpdflash, sizeof(kvSizeUpdflash), sizeof(kvSizeUpdflash), 1, fd) != 1)
+	{
+		dprintf("Couldn't read KV size from %s", updflash);
+		fclose(fd);
+		return -1;
+	}
+
+	fseek(fd,0x6C,SEEK_SET);
+
+	if (fread_s(&kvOffsetUpdflash, sizeof(kvOffsetUpdflash), sizeof(kvOffsetUpdflash), 1, fd) != 1)
+	{
+		dprintf("Couldn't read KV offset from %s", updflash);
+		fclose(fd);
+		return -1;
+	}
+
+	if( kvOffset != kvOffsetUpdflash || kvSize != kvSizeUpdflash )
+	{
+		dprintf("Error: KV size or KV offset in source image does not match patch image\n");
+		fclose(fd);
+		return -1;
+	}
+
+	fseek(fd,kvOffsetPhys,SEEK_SET);
+
+	if( fwrite(kvBuf,kvSizePhys,1,fd) < 0 )
+	{
+		dprintf("Error: Failed to write KV to patch image %d\n",errno);
+		fclose(fd);
+		return -1;
+	}
+
+	fclose(fd);
+
+	return rc;
+}
+
+
 //--------------------------------------------------------------------------------------
 // Name: main()
 // Desc: Entry point to the program
 //--------------------------------------------------------------------------------------
 VOID __cdecl main()
 {
+	char * baseImagePath = "";
+
 	// Initialize the console window
-	MakeConsole("embed:\\font", CONSOLE_COLOR_BLACK, CONSOLE_COLOR_GOLD);
+	MakeConsole("embed:\\font", CONSOLE_COLOR_BLUE, CONSOLE_COLOR_WHITE);
 	if (!CheckGameMounted())
 		return;
-
-#ifndef READ_ONLY
-	write = fexists("game:\\updflash.bin");
-#endif
 
 #ifdef TRANSLATION_BY
 #ifdef USE_UNICODE
@@ -415,19 +548,19 @@ VOID __cdecl main()
 #endif
 	dprintf(TRANSLATION_BY);
 #else
-	dprintf("Simple 360 NAND Flasher by Swizzy v1.5 (BETA)\n\n");
+	dprintf("Simple RGH Installer (BETA)\n\n");
 #endif
 
 #ifdef READ_ONLY
 	dprintf(MSG_READ_ONLY_NOTICE);
 #endif
 
-	dprintf(MSG_DETECTING_NAND_TYPE);
+	//dprintf(MSG_DETECTING_NAND_TYPE);
 	MMC = (sfcx_detecttype() == 1); // 1 = MMC, 0 = RAW NAND
 	if (!MMC)
 		config = sfcx_getconf();
 	bool GotKey = false;
-	dprintf(MSG_ATTEMTPING_TO_GRAB_CPUKEY);
+	//dprintf(MSG_ATTEMTPING_TO_GRAB_CPUKEY);
 	if (GetCPUKey())
 	{
 		SaveCPUKey("game:\\cpukey.txt");
@@ -436,100 +569,82 @@ VOID __cdecl main()
 	else
 	{
 		dprintf(MSG_ERROR MSG_INCOMPATIBLE_DASHLAUNCH);
-		GotKey = false;
+		Sleep(2000);
+		return;
+		//GotKey = false;
 	}
-	dprintf(MSG_ATTEMPTING_TO_GET_CONSOLE_SERIAL);
+	//dprintf(MSG_ATTEMPTING_TO_GET_CONSOLE_SERIAL);
 	DWORD dwtmp = 0xC;
 	GotSerial = XeKeysGetKey(0x14, consoleSerial, &dwtmp) >= 0;
 	PrintConsoleInfo(GotKey);
-	TryAutoMode();
-	if (write)
+
+	switch(CONSOLE_TYPE_FROM_FLAGS)
 	{
-		if (!MMC)
-		{
-			dprintf(MSG_PRESS_A_TO_FLASH_RAWFLASH);
-			dprintf(MSG_PRESS_B_TO_SAFE_FLASH_RAWFLASH);
-		}
-		else
-		{
-			dprintf(MSG_PRESS_A_TO_FLASH_RAWFLASH4G);
-			dprintf(MSG_PRESS_B_TO_SAFE_FLASH_RAWFLASH4G);
-		}
+		case CONSOLE_TYPE_FALCON:
+			if (!fexists("game:\\images\\falcon_glitch2m_rgh3.bin"))
+			{
+				dprintf("Falcon base image is missing. Exiting...\n");
+				Sleep(3000);
+				return;
+			}
+
+			baseImagePath = "game:\\images\\falcon_glitch2m_rgh3.bin";
+			break;
+		default:
+			dprintf("Console type unsupported. Exiting...");
+			Sleep(3000);
+			return;
 	}
-	if (!MMC)
-		dprintf(MSG_PRESS_X_TO_DUMP_RAWFLASH);
-	else
-		dprintf(MSG_PRESS_X_TO_DUMP_RAWFLASH4G);
-	dprintf(MSG_PRESS_ANY_OTHER_BUTTON_TO_EXIT);
+
+	// TODO just for debugging right?
+	dprintf("Base image path: %s\n",baseImagePath);
+
+	dprintf("\n");
+
+
+	dprintf("Press A to install RGH3 (dump and flash)\n");
+	dprintf("Press any other button to exit.\n\n");
+
 	for(;;)
 	{
 		m_pGamepad = ATG::Input::GetMergedInput();
-		if (!started)
+
+		if (m_pGamepad->wPressedButtons & XINPUT_GAMEPAD_A)
 		{
-			if ((m_pGamepad->wPressedButtons & XINPUT_GAMEPAD_A) && (write))
+			char backupPath[512];
+			unsigned char encryptedKvPages[0x4200];
+
+			sprintf_s(backupPath, 512, "game:\\flashdmp_%s.bin", consoleSerial);
+
+			dprintf("Saving existing NAND to %s\n",backupPath);
+
+			//dumper(path);
+			
+			dprintf("Making a copy of the base image...\n");
+
+			//CopyFile(baseImagePath,"game:\\updflash.bin",false);
+
+			dprintf("Patching KV... ");
+
+			if(patch_raw_kv_pages(backupPath,"game:\\updflash.bin"))
 			{
-				flasher();
+				dprintf("Failed to patch KV!\n");
 			}
-			else if ((m_pGamepad->wPressedButtons & XINPUT_GAMEPAD_B) && (!dumped) && (write))
+			else
 			{
-				if (!fexists("game:\\recovery.bin"))
-					dumper("game:\\recovery.bin");
-				else
-				{
-					dprintf(MSG_PRESS_START_TO_OVERWRITE_EXISTING_FILE, "game:\\recovery.bin");
-					if (GotSerial)
-						dprintf(MSG_PRESS_B_TO_OVERWRITE_EXISTING_FILE_SERIAL, "game:\\recovery", consoleSerial);
-					for(;;)
-					{
-						m_pGamepad = ATG::Input::GetMergedInput();
-						if (m_pGamepad->wPressedButtons & XINPUT_GAMEPAD_START)
-						{
-							dumper("game:\\recovery.bin");
-							break;
-						}
-						else if ((m_pGamepad->wPressedButtons & XINPUT_GAMEPAD_B) && GotSerial)
-						{
-							char path[512];
-							sprintf_s(path, 512, "game:\\recovery_%s.bin", consoleSerial);							
-							dumper(path);
-							break;
-						}
-					}
-				}
-				flasher();
+				dprintf("Success\n");
 			}
-			else if ((m_pGamepad->wPressedButtons & XINPUT_GAMEPAD_X) && (!dumped))
-			{
-				if (!fexists("game:\\flashdmp.bin"))
-					dumper("game:\\flashdmp.bin");
-				else
-				{
-					dprintf(MSG_PRESS_START_TO_OVERWRITE_EXISTING_FILE, "game:\\flashdmp.bin");
-					if (GotSerial)
-						dprintf(MSG_PRESS_B_TO_OVERWRITE_EXISTING_FILE_SERIAL, "game:\\flashdmp", consoleSerial);
-					for(;;)
-					{
-						m_pGamepad = ATG::Input::GetMergedInput();
-						if (m_pGamepad->wPressedButtons & XINPUT_GAMEPAD_START)
-						{
-							dumper("game:\\flashdmp.bin");
-							break;
-						}
-						else if ((m_pGamepad->wPressedButtons & XINPUT_GAMEPAD_B) && (GotSerial))
-						{
-							char path[512];
-							sprintf_s(path, 512, "game:\\flashdmp_%s.bin", consoleSerial);							
-							dumper(path);
-							break;
-						}
-					}
-				}
-				dprintf(MSG_PRESS_ANY_BUTTON_TO_EXIT);
-			}
-			else if (m_pGamepad->wPressedButtons) { break; }
+
+			//flasher();
+
+			dprintf("All done! Press any key to exit!");
 		}
-		else if ((m_pGamepad->wPressedButtons) && (dumped)) { break; }
+		else if(m_pGamepad->wPressedButtons)
+		{
+			break;
+		}
 	}
+
 	if (!MMC)
 		sfcx_setconf(config);
 }

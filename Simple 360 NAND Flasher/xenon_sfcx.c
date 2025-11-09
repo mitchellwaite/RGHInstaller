@@ -797,9 +797,9 @@ int sfcx_detecttype(void)
 	unsigned int config = sfcx_readreg(0x7FEAC0FC);
 	if (config == 0)
 	{
-		dprintf(MSG_RAW_NAND_DETECTED);
+		//dprintf(MSG_RAW_NAND_DETECTED);
 		return 0;
 	}
-	dprintf(MSG_MMC_NAND_DETECTED);
+	//dprintf(MSG_MMC_NAND_DETECTED);
 	return 1;
 }

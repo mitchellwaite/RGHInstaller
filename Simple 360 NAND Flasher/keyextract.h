@@ -14,6 +14,17 @@ typedef struct _XBOX_KRNL_VERSION{
 
 extern "C" PXBOX_KRNL_VERSION XboxKrnlVersion;
 
+typedef struct _XBOX_HARDWARE_INFO {
+    DWORD Flags;
+    unsigned char NumberOfProcessors;
+    unsigned char PCIBridgeRevisionID;
+    unsigned char Reserved[6];
+    unsigned short BldrMagic;
+    unsigned short BldrFlags;
+} XBOX_HARDWARE_INFO, *PXBOX_HARDWARE_INFO;
+
+extern "C" PXBOX_HARDWARE_INFO XboxHardwareInfo;
+
 typedef LONG NTSTATUS;
 
 typedef enum {
@@ -47,6 +58,19 @@ typedef struct _ldata{
 	DWORD iniPathSel; // the path corresponding to this number can be gotten via dlaunchGetDriveList, 0xFF is none, 0xFE is forced
 } ldata, *pldata;
 
+typedef enum {
+CONSOLE_TYPE_XENON= 0x00000000,
+CONSOLE_TYPE_ZEPHYR= 0x10000000,
+CONSOLE_TYPE_FALCON= 0x20000000,
+CONSOLE_TYPE_JASPER= 0x30000000,
+CONSOLE_TYPE_TRINITY= 0x40000000,
+CONSOLE_TYPE_CORONA= 0x50000000,
+CONSOLE_TYPE_WINCHESTER= 0x60000000,
+} CONSOLE_TYPE;
+
+#define CONSOLE_TYPE_FLAGS_MASK 0xF0000000
+#define CONSOLE_TYPE_FROM_FLAGS XboxHardwareInfo->Flags&CONSOLE_TYPE_FLAGS_MASK
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -68,6 +92,8 @@ extern "C" {
 #define MODULE_LAUNCH		"launch.xex"
 
 void PrintDash();
+
+void PrintConsoleType();
 
 void PrintDLVersion();
 

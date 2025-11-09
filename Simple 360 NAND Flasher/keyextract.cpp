@@ -23,6 +23,37 @@ void PrintDash()
 	dprintf(MSG_CURRENT_DASHBOARD, XboxKrnlVersion->Major, XboxKrnlVersion->Minor, XboxKrnlVersion->Build, XboxKrnlVersion->Qfe);
 }
 
+void PrintConsoleType()
+{
+   switch(CONSOLE_TYPE_FROM_FLAGS)
+   {
+      case CONSOLE_TYPE_XENON:
+         dprintf("Console Type: Xenon\n");
+         break;
+      case CONSOLE_TYPE_ZEPHYR:
+         dprintf("Console Type: Zephyr\n");
+         break;
+      case CONSOLE_TYPE_FALCON:
+         dprintf("Console Type: Falcon\n");
+         break;
+      case CONSOLE_TYPE_JASPER:
+         dprintf("Console Type: Jasper\n");
+         break;
+      case CONSOLE_TYPE_TRINITY:
+         dprintf("Console Type: Trinity\n");
+         break;
+      case CONSOLE_TYPE_CORONA:
+         dprintf("Console Type: Corona\n");
+         break;
+      case CONSOLE_TYPE_WINCHESTER:
+         dprintf("Console Type: Winchester\n");
+         break;
+      default:
+         dprintf("Console Type: Unknown\n");
+         break;
+   }
+}
+
 PVOID resolveFunction(PCHAR szModuleName, DWORD dwOrdinal)
 {
 	PVOID pProc = NULL;
@@ -91,6 +122,6 @@ void SaveCPUKey(const char* file)
 		for (i = 0; i < 0x10; i++)
 			fprintf(fd, "%02X", keybuf[i]);
 		fclose(fd);
-		dprintf(MSG_CPUKEY_SUCCESSFULLY_SAVED, file);
+		//dprintf(MSG_CPUKEY_SUCCESSFULLY_SAVED, file);
 	}
 }
