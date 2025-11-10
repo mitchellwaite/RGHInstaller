@@ -212,11 +212,9 @@ int sfcx_erase_block(int address)
 	return status;
 }
 
-void sfcx_calcecc(unsigned int *data)
+void sfcx_calcecc_ex(unsigned int *data, unsigned char* edc)
 {
 	unsigned int i=0, val=0;
-	unsigned char *edc = ((unsigned char*)data) + sfc.page_sz;
-
 	unsigned int v=0;
 
 	for (i = 0; i < 0x1066; i++)
@@ -233,10 +231,16 @@ void sfcx_calcecc(unsigned int *data)
 	val = ~val;
 
 	// 26 bit ecc data
-	edc[0xC] = ((val << 6) | (edc[0xC] & 0x3F)) & 0xFF;
-	edc[0xD] = (val >> 2) & 0xFF;
-	edc[0xE] = (val >> 10) & 0xFF;
-	edc[0xF] = (val >> 18) & 0xFF;
+	edc[0] = (val << 6) & 0xFF;
+	edc[1] = (val >> 2) & 0xFF;
+	edc[2] = (val >> 10) & 0xFF;
+	edc[3] = (val >> 18) & 0xFF;
+}
+
+void sfcx_calcecc(unsigned int *data)
+{	
+	unsigned char *edc = ((unsigned char*)data) + sfc.page_sz;
+	sfcx_calcecc_ex(data, &edc[0xC]);
 }
 
 int sfcx_get_blocknumber(unsigned char *data)
