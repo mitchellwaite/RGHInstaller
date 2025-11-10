@@ -119,7 +119,7 @@ VOID flasher()
 	}
 	started = true;
 	KillControllers();
-	ClearConsole();
+	//ClearConsole();
 	time(&start);
 	dprintf(MSG_WARNING_DO_NOT_TOUCH_CONSOLE_OR_CONTROLLER);
 	int tmp = HasSpare("game:\\updflash.bin");
@@ -149,7 +149,7 @@ VOID flasher()
 			}
 		}
 		unsigned int r = sfcx_init();
-		sfcx_printinfo(r);
+		//sfcx_printinfo(r);
 #ifdef USE_UNICODE
 		dprintf(L"\n\n");
 #else
@@ -253,16 +253,16 @@ VOID dumper(char *filename)
 				size = RAW_NAND_64;
 			}
 		}
-		ClearConsole();
+		//ClearConsole();
 		time(&start);
 		unsigned int r = sfcx_init();
-		sfcx_printinfo(r);
+		//sfcx_printinfo(r);
 		try_rawdump(filename, size);
 		sfcx_setconf(config);
 	}
 	else
 	{
-		ClearConsole();
+		//ClearConsole();
 		time(&start);
 		try_rawdump4g(filename);
 	}
@@ -398,22 +398,34 @@ int bytesToUint32(unsigned char * data, int offset)
 }
 
 
-int patch_raw_kv_pages(char * flashdmp, char * updflash)
+int patch_raw_kv_pages(char * flashdmp, unsigned char cpukey[0x10], char * updflash)
 {
 	int rc = 0;
-	int kvSize = 0;
-	int kvOffset = 0;
-	int pageCount = 0;
 
-	int kvOffsetPhys = 0;
-	int kvOffsetInPage = 0;
-	int kvSizePhys = 0;
+	// This is all assuming a retail-ish NAND image with
+	// a retail KV as input. Devkit KVs are a whole different thing
+	int kvSize = 0x4000;
+	int kvOffset = 0x4000;
+	int pageCount = 20;
+
+	int kvOffsetPhys = 0x4200;
+	int kvSizePhys = 0x4200;
 
 	// Sanity check when copying pages to the new image
-	int kvOffsetUpdflash = 0;
-	int kvSizeUpdflash = 0;
+	int kvOffsetFlash = 0;
+	int kvSizeFlash = 0;
 
 	unsigned char kvBuf[0x4200] = {'\0'};
+	unsigned char kvBufNoEcc[0x4000] = {'\0'};
+
+	unsigned char kvBufPatch[0x4200] = {'\0'};
+
+	unsigned char kvRc4Key[0x10] = {'\0'};
+
+	unsigned char cpukeyDest[0x10] = {'\0'};
+	unsigned char kvRc4KeyDest[0x10] = {'\0'};
+
+	unsigned char secret[0x2] = { 0x07, 0x12 };
 
 	FILE *fd;
 
@@ -427,51 +439,34 @@ int patch_raw_kv_pages(char * flashdmp, char * updflash)
 	// we don't need to account for SPARE data
 	fseek(fd,0x60,SEEK_SET);
 
-	if (fread_s(&kvSize, sizeof(kvSize), sizeof(kvSize), 1, fd) != 1)
+	if (fread_s(&kvSizeFlash, sizeof(kvSizeFlash), sizeof(kvSizeFlash), 1, fd) != 1)
 	{
-		dprintf("Couldn't read KV size from %s", flashdmp);
+		dprintf("Couldn't read KV size from %s\n", flashdmp);
 		fclose(fd);
 		return -1;
 	}
 
 	fseek(fd,0x6C,SEEK_SET);
 
-	if (fread_s(&kvOffset, sizeof(kvOffset), sizeof(kvOffset), 1, fd) != 1)
+	if (fread_s(&kvOffsetFlash, sizeof(kvOffsetFlash), sizeof(kvOffsetFlash), 1, fd) != 1)
 	{
-		dprintf("Couldn't read KV offset from %s", flashdmp);
+		dprintf("Couldn't read KV offset from %s\n", flashdmp);
 		fclose(fd);
 		return -1;
 	}
 
-	dprintf("KV size: 0x%x\nKV offset: 0x%x",kvSize,kvOffset);
-
-	// KV size in NAND is logical, without spare data
-	pageCount = kvSize / 0x200;
-	kvSizePhys = pageCount * 0x210;
-
-	if(sizeof(kvBuf) < kvSizePhys)
+	if( kvOffsetFlash != kvOffset || kvSizeFlash != kvSize )
 	{
-		dprintf("Error: KV size in NAND is larger than dataBufSz!");
+		dprintf("Error, only consoles with retail type 1 or type 2 KVs are supported!\n");
 		fclose(fd);
 		return -1;
 	}
-
-	kvOffsetInPage = kvOffset % 0x200;
-
-	if(0 != kvOffsetInPage)
-	{
-		dprintf("Error: KV is not on a page boundary!");
-		fclose(fd);
-		return -1;
-	}
-
-	kvOffsetPhys = (kvOffset / 0x200) * 0x210;
 
 	fseek(fd,kvOffsetPhys,SEEK_SET);
 
 	if (fread_s(&kvBuf, sizeof(kvBuf),kvSizePhys,1,fd) != 1)
 	{
-		dprintf("Couldn't read KV from %s", flashdmp);
+		dprintf("Couldn't read KV from %s\n", flashdmp);
 		fclose(fd);
 		return -1;
 	}
@@ -479,42 +474,89 @@ int patch_raw_kv_pages(char * flashdmp, char * updflash)
 	// Presumably we've read the KV. Now we've got to patch the new image
 	fclose(fd);
 
+	// un-ecc the KV
+	for(int i = 0; i<pageCount; i++)
+	{
+		memcpy(&kvBufNoEcc[0x200 * i],&kvBuf[0x210 * i],0x200); 
+	}
+
+	// Generate the RC4 key for decrypting the KV
+	XeCryptHmacSha(cpukey, 0x10, kvBufNoEcc, 0x10, NULL, 0, NULL, 0, kvRc4Key, sizeof(kvRc4Key));
+
+	dprintf("KV decryption key: ");
+	for (int i = 0; i < 0x10; i++)
+	{
+		dprintf("%02X", kvRc4Key[i]);
+	}
+	dprintf("\n");
+
+	// Decrypt the KV, leaving the nonce
+	XeCryptRc4(kvRc4Key,sizeof(kvRc4Key),&kvBufNoEcc[0x10],sizeof(kvBufNoEcc) - 0x10);
+
 	if (fopen_s(&fd, updflash, "rb+") != 0)
 	{		
 		dprintf(MSG_ERROR MSG_UNABLE_TO_OPEN_FOR_WRITING, updflash);
 		return -1;
 	}
 
-	// KV size is stored at 0x60 in NAND, it's the first page so
-	// we don't need to account for SPARE data
-	fseek(fd,0x60,SEEK_SET);
+	// 0xC6020 is the start of fuseline 4 when the fuses are stored at 0xC0000 logical
+	// If we read 0x10 bytes we'll get the virtual CPU key
+	fseek(fd,0xC6020,SEEK_SET);
 
-	if (fread_s(&kvSizeUpdflash, sizeof(kvSizeUpdflash), sizeof(kvSizeUpdflash), 1, fd) != 1)
+	if (fread_s(cpukeyDest,0x10,0x10,1,fd) != 1)
 	{
-		dprintf("Couldn't read KV size from %s", updflash);
+		dprintf("Couldn't read CPU key from %s\n", flashdmp);
 		fclose(fd);
 		return -1;
 	}
 
-	fseek(fd,0x6C,SEEK_SET);
-
-	if (fread_s(&kvOffsetUpdflash, sizeof(kvOffsetUpdflash), sizeof(kvOffsetUpdflash), 1, fd) != 1)
+	dprintf("New Virtual CPU key: ");
+	for (int i = 0; i < 0x10; i++)
 	{
-		dprintf("Couldn't read KV offset from %s", updflash);
+		dprintf("%02X", cpukeyDest[i]);
+	}
+	dprintf("\n");
+
+	// Read the KV from the new image
+	fseek(fd,kvOffsetPhys,SEEK_SET);
+
+	if (fread_s(&kvBufPatch, sizeof(kvBufPatch),kvSizePhys,1,fd) != 1)
+	{
+		dprintf("Couldn't read KV from %s\n", flashdmp);
 		fclose(fd);
 		return -1;
 	}
 
-	if( kvOffset != kvOffsetUpdflash || kvSize != kvSizeUpdflash )
+	// TODO this doesn't actually work right... gotta copy what JRunner does
+	// Generate the RC4 key used for re-encrypting the KV
+	XeCryptHmacSha(cpukeyDest, 0x10, kvBufPatch, 0x10, NULL, 0, NULL, 0, kvRc4KeyDest, sizeof(kvRc4KeyDest));
+
+	dprintf("KV encryption key: ");
+	for (int i = 0; i < 0x10; i++)
 	{
-		dprintf("Error: KV size or KV offset in source image does not match patch image\n");
-		fclose(fd);
-		return -1;
+		dprintf("%02X", kvRc4KeyDest[i]);
+	}
+	dprintf("\n");
+
+	// Re-encrypt the KV
+	XeCryptRc4(kvRc4KeyDest,sizeof(kvRc4KeyDest),&kvBufNoEcc[0x10],sizeof(kvBufNoEcc) - 0x10);
+
+	// Copy the nonce
+	memcpy(kvBufNoEcc,kvBufPatch,0x10);
+
+	for( int i = 0; i<pageCount; i++ )
+	{
+		// Copy only the page data
+		memcpy(&kvBufPatch[0x210 * i], &kvBufNoEcc[0x200 * i], 0x200);
+
+		// We need to recalculate the ECC
+		memset(&kvBufPatch[(0x210 * i) + 0x20C],0x0, 4); //zero only EDC bytes  
+		sfcx_calcecc((unsigned int *)&kvBufPatch[0x210 * i]); //recalc EDC bytes
 	}
 
 	fseek(fd,kvOffsetPhys,SEEK_SET);
 
-	if( fwrite(kvBuf,kvSizePhys,1,fd) < 0 )
+	if( fwrite(kvBufPatch,kvSizePhys,1,fd) < 0 )
 	{
 		dprintf("Error: Failed to write KV to patch image %d\n",errno);
 		fclose(fd);
@@ -526,7 +568,6 @@ int patch_raw_kv_pages(char * flashdmp, char * updflash)
 	return rc;
 }
 
-
 //--------------------------------------------------------------------------------------
 // Name: main()
 // Desc: Entry point to the program
@@ -534,6 +575,7 @@ int patch_raw_kv_pages(char * flashdmp, char * updflash)
 VOID __cdecl main()
 {
 	char * baseImagePath = "";
+	unsigned char cpukey[0x10];
 
 	// Initialize the console window
 	MakeConsole("embed:\\font", CONSOLE_COLOR_BLUE, CONSOLE_COLOR_WHITE);
@@ -561,7 +603,7 @@ VOID __cdecl main()
 		config = sfcx_getconf();
 	bool GotKey = false;
 	//dprintf(MSG_ATTEMTPING_TO_GRAB_CPUKEY);
-	if (GetCPUKey())
+	if (GetCPUKey((unsigned char *)&cpukey))
 	{
 		SaveCPUKey("game:\\cpukey.txt");
 		GotKey = true;
@@ -596,7 +638,6 @@ VOID __cdecl main()
 			return;
 	}
 
-	// TODO just for debugging right?
 	dprintf("Base image path: %s\n",baseImagePath);
 
 	dprintf("\n");
@@ -612,32 +653,33 @@ VOID __cdecl main()
 		if (m_pGamepad->wPressedButtons & XINPUT_GAMEPAD_A)
 		{
 			char backupPath[512];
-			unsigned char encryptedKvPages[0x4200];
 
 			sprintf_s(backupPath, 512, "game:\\flashdmp_%s.bin", consoleSerial);
 
 			dprintf("Saving existing NAND to %s\n",backupPath);
 
-			//dumper(path);
+			dumper(backupPath);
 			
 			dprintf("Making a copy of the base image...\n");
 
-			//CopyFile(baseImagePath,"game:\\updflash.bin",false);
+			CopyFile(baseImagePath,"game:\\updflash.bin",false);
 
-			dprintf("Patching KV... ");
+			dprintf("Patching KV...");
 
-			if(patch_raw_kv_pages(backupPath,"game:\\updflash.bin"))
+			if(patch_raw_kv_pages(backupPath, cpukey, "game:\\updflash.bin"))
 			{
-				dprintf("Failed to patch KV!\n");
+				dprintf("Failed to patch KV! Exiting...\n");
+				Sleep(3000);
+				return;
 			}
 			else
 			{
 				dprintf("Success\n");
 			}
-
-			//flasher();
-
-			dprintf("All done! Press any key to exit!");
+			
+			dprintf("Flashing NAND..\n");
+			
+			flasher();
 		}
 		else if(m_pGamepad->wPressedButtons)
 		{
