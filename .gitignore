@@ -12,7 +12,8 @@
 *.la
 *.a
 /Simple 360 NAND Flasher/Release_LTCG
-/Simple 360 NAND Flasher/Release
+/Simple 360 NAND Flasher/Release*
+/Simple 360 NAND Flasher/Common/Release_LTCG
 *.ipch
 
 # User generated files
