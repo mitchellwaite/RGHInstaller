@@ -435,6 +435,10 @@
     <ClCompile Include="Corona4G.c">
       <CompileAs>CompileAsC</CompileAs>
     </ClCompile>
+    <ClCompile Include="crypt\des.c" />
+    <ClCompile Include="crypt\hmac_sha1.c" />
+    <ClCompile Include="crypt\rc4.c" />
+    <ClCompile Include="crypt\sha1.c" />
     <ClCompile Include="keyextract.cpp" />
     <ClCompile Include="nandflasher_1.cpp" />
     <ClCompile Include="OutputConsole.cpp" />
@@ -451,6 +455,10 @@
   <ItemGroup>
     <ClInclude Include="Automation.h" />
     <ClInclude Include="Corona4G.h" />
+    <ClInclude Include="crypt\des.h" />
+    <ClInclude Include="crypt\hmac_sha1.h" />
+    <ClInclude Include="crypt\rc4.h" />
+    <ClInclude Include="crypt\sha.h" />
     <ClInclude Include="keyextract.h" />
     <ClInclude Include="Language.h" />
     <ClInclude Include="OutputConsole.h" />

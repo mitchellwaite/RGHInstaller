@@ -6,6 +6,8 @@
 #include "Corona4G.h"
 #include "Automation.h"
 #include "keyextract.h"
+#include "crypt\hmac_sha1.h"
+#include "crypt\rc4.h"
 
 extern "C" {
 #include "xenon_sfcx.h"
@@ -397,175 +399,154 @@ int bytesToUint32(unsigned char * data, int offset)
 	return *(int *)(data + offset);
 }
 
+void print_key(unsigned char * key, char * keyName)
+{
+	dprintf("%s: ", keyName);
+	for (int i = 0; i < 0x10; i++)
+	{
+		dprintf("%02X", key[i]);
+	}
+	dprintf("\n");
+}
 
 int patch_raw_kv_pages(char * flashdmp, unsigned char cpukey[0x10], char * updflash)
 {
 	int rc = 0;
 
-	// This is all assuming a retail-ish NAND image with
-	// a retail KV as input. Devkit KVs are a whole different thing
-	int kvSize = 0x4000;
-	int kvOffset = 0x4000;
-	int pageCount = 20;
+	FILE * fd;
+	unsigned char rc4_state[0x100];
+	HMAC_SHA1_CTX ctx;
 
-	int kvOffsetPhys = 0x4200;
-	int kvSizePhys = 0x4200;
+	BYTE srcKvPages[0x4200] = {'\0'};
+	BYTE srcKvHmacKey[0x10] = {'\0'};
+	BYTE srcKvRc4Key[0x10] = {'\0'};
 
-	// Sanity check when copying pages to the new image
-	int kvOffsetFlash = 0;
-	int kvSizeFlash = 0;
+	BYTE destKvPages[0x4200] = {'\0'};
+	BYTE destCpuKey[0x10] = {'\0'};
+	BYTE destKvHmacSecret[] = { 0x07, 0x12 };
+	BYTE out[0x20] = { '\0' };
 
-	unsigned char kvBuf[0x4200] = {'\0'};
-	unsigned char kvBufNoEcc[0x4000] = {'\0'};
+	BYTE destKvHmacKey[0x10] = {'\0'};
+	BYTE destKvRc4Key[0x10] = {'\0'};
 
-	unsigned char kvBufPatch[0x4200] = {'\0'};
+	BYTE kvPagesNoEcc[0x4000] = {'\0'};
+	BYTE kvPagesNoEccCopy[0x4000] = {'\0'};
 
-	unsigned char kvRc4Key[0x10] = {'\0'};
-
-	unsigned char cpukeyDest[0x10] = {'\0'};
-	unsigned char kvRc4KeyDest[0x10] = {'\0'};
-
-	unsigned char secret[0x2] = { 0x07, 0x12 };
-
-	FILE *fd;
-
-	if (fopen_s(&fd, flashdmp, "rb") != 0)
-	{		
-		dprintf(MSG_ERROR MSG_UNABLE_TO_OPEN_FOR_READING, flashdmp);
-		return -1;
-	}
-
-	// KV size is stored at 0x60 in NAND, it's the first page so
-	// we don't need to account for SPARE data
-	fseek(fd,0x60,SEEK_SET);
-
-	if (fread_s(&kvSizeFlash, sizeof(kvSizeFlash), sizeof(kvSizeFlash), 1, fd) != 1)
+	if(fopen_s(&fd,flashdmp,"rb"))
 	{
-		dprintf("Couldn't read KV size from %s\n", flashdmp);
-		fclose(fd);
+		dprintf("failed to fopen");
 		return -1;
 	}
 
-	fseek(fd,0x6C,SEEK_SET);
+	fseek(fd,0x4200,SEEK_SET);
 
-	if (fread_s(&kvOffsetFlash, sizeof(kvOffsetFlash), sizeof(kvOffsetFlash), 1, fd) != 1)
+	if(fread(srcKvPages,0x4200,1,fd) != 1)
 	{
-		dprintf("Couldn't read KV offset from %s\n", flashdmp);
-		fclose(fd);
+		dprintf("failed to fread");
 		return -1;
 	}
 
-	if( kvOffsetFlash != kvOffset || kvSizeFlash != kvSize )
-	{
-		dprintf("Error, only consoles with retail type 1 or type 2 KVs are supported!\n");
-		fclose(fd);
-		return -1;
-	}
-
-	fseek(fd,kvOffsetPhys,SEEK_SET);
-
-	if (fread_s(&kvBuf, sizeof(kvBuf),kvSizePhys,1,fd) != 1)
-	{
-		dprintf("Couldn't read KV from %s\n", flashdmp);
-		fclose(fd);
-		return -1;
-	}
-
-	// Presumably we've read the KV. Now we've got to patch the new image
 	fclose(fd);
 
-	// un-ecc the KV
-	for(int i = 0; i<pageCount; i++)
+	// 0x4200 / 0x210 = 0x20 pages
+	for(int i = 0; i < 0x20; i++)
 	{
-		memcpy(&kvBufNoEcc[0x200 * i],&kvBuf[0x210 * i],0x200); 
+		memcpy(&kvPagesNoEcc[0x200 * i],&srcKvPages[0x210 * i], 0x200);
 	}
 
-	// Generate the RC4 key for decrypting the KV
-	XeCryptHmacSha(cpukey, 0x10, kvBufNoEcc, 0x10, NULL, 0, NULL, 0, kvRc4Key, sizeof(kvRc4Key));
+	fd = fopen("game:\\kv_enc.bin","wb");
+	fwrite(kvPagesNoEcc,0x4000,1,fd);
+	fclose(fd);
 
-	dprintf("KV decryption key: ");
-	for (int i = 0; i < 0x10; i++)
+	// Calculate the decryption key
+	memcpy(srcKvHmacKey,kvPagesNoEcc,0x10);
+	HMAC_SHA1(cpukey, srcKvHmacKey, srcKvRc4Key, 0x10);
+
+	print_key(cpukey, "CPU Key");
+	print_key(srcKvHmacKey, "Source HMAC Key");
+	print_key(srcKvRc4Key, "Source RC4 Key");
+
+	// Decrypt the KV
+	memset(rc4_state, 0, 0x100);
+	rc4_init(rc4_state, srcKvRc4Key, 0x10);
+	rc4_crypt(rc4_state, (unsigned char*) &kvPagesNoEcc[0x10], 0x4000 - 0x10);
+
+	fd = fopen("game:\\kv_dec.bin","wb");
+	fwrite(kvPagesNoEcc,0x4000,1,fd);
+	fclose(fd);
+
+	// Get the destination KV data and such
+	if(fopen_s(&fd,updflash,"rb+"))
 	{
-		dprintf("%02X", kvRc4Key[i]);
-	}
-	dprintf("\n");
-
-	// Decrypt the KV, leaving the nonce
-	XeCryptRc4(kvRc4Key,sizeof(kvRc4Key),&kvBufNoEcc[0x10],sizeof(kvBufNoEcc) - 0x10);
-
-	if (fopen_s(&fd, updflash, "rb+") != 0)
-	{		
-		dprintf(MSG_ERROR MSG_UNABLE_TO_OPEN_FOR_WRITING, updflash);
+		dprintf("failed to fopen");
 		return -1;
 	}
 
-	// 0xC6020 is the start of fuseline 4 when the fuses are stored at 0xC0000 logical
-	// If we read 0x10 bytes we'll get the virtual CPU key
+	// Fuseline 4 and 5 make up the CPU key, and are located at
+	// 0xC6020
 	fseek(fd,0xC6020,SEEK_SET);
+	fread(destCpuKey,0x10,1,fd);
 
-	if (fread_s(cpukeyDest,0x10,0x10,1,fd) != 1)
+	fseek(fd,0x4200,SEEK_SET);
+
+	if(fread(destKvPages,0x4200,1,fd) != 1)
 	{
-		dprintf("Couldn't read CPU key from %s\n", flashdmp);
+		dprintf("failed to fread");
 		fclose(fd);
 		return -1;
 	}
 
-	dprintf("New Virtual CPU key: ");
-	for (int i = 0; i < 0x10; i++)
-	{
-		dprintf("%02X", cpukeyDest[i]);
-	}
-	dprintf("\n");
+	// Now that we know our destination CPU key, re-encrypt the KV
+	// This code is all borrowed from libxenon
+	memcpy(kvPagesNoEccCopy,kvPagesNoEcc,0x4000);
 
-	// Read the KV from the new image
-	fseek(fd,kvOffsetPhys,SEEK_SET);
+	HMAC_SHA1_Init(&ctx);
+	HMAC_SHA1_UpdateKey(&ctx, (unsigned char *) destCpuKey, 0x10);
+	HMAC_SHA1_EndKey(&ctx);
 
-	if (fread_s(&kvBufPatch, sizeof(kvBufPatch),kvSizePhys,1,fd) != 1)
-	{
-		dprintf("Couldn't read KV from %s\n", flashdmp);
-		fclose(fd);
-		return -1;
-	}
+	HMAC_SHA1_StartMessage(&ctx);
 
-	// TODO this doesn't actually work right... gotta copy what JRunner does
-	// Generate the RC4 key used for re-encrypting the KV
-	XeCryptHmacSha(cpukeyDest, 0x10, kvBufPatch, 0x10, NULL, 0, NULL, 0, kvRc4KeyDest, sizeof(kvRc4KeyDest));
+	HMAC_SHA1_UpdateMessage(&ctx, (unsigned char*) &kvPagesNoEccCopy[0x10], 0x4000 - 0x10);
+	HMAC_SHA1_UpdateMessage(&ctx, (unsigned char*) &destKvHmacSecret[0x00], 0x02);	//Special appendage
 
-	dprintf("KV encryption key: ");
-	for (int i = 0; i < 0x10; i++)
-	{
-		dprintf("%02X", kvRc4KeyDest[i]);
-	}
-	dprintf("\n");
+	HMAC_SHA1_EndMessage(out, &ctx);
+	HMAC_SHA1_Done(&ctx);
+
+	// Memcpy our HMAC key out of the result and calculate
+	// the RC4 encryption key
+	memcpy(destKvHmacKey,out,0x10);
+	HMAC_SHA1(destCpuKey, destKvHmacKey, destKvRc4Key, 0x10);
+
+	print_key(destCpuKey, "Virtual CPU Key");
+	print_key(destKvHmacKey, "Destination HMAC Key");
+	print_key(destKvRc4Key, "Destination RC4 Key");
 
 	// Re-encrypt the KV
-	XeCryptRc4(kvRc4KeyDest,sizeof(kvRc4KeyDest),&kvBufNoEcc[0x10],sizeof(kvBufNoEcc) - 0x10);
+	memset(rc4_state, 0, 0x100);
+	rc4_init(rc4_state, destKvRc4Key ,0x10);
+	rc4_crypt(rc4_state, (unsigned char*) &kvPagesNoEcc[0x10], 0x4000 - 0x10);
 
-	// Copy the nonce
-	memcpy(kvBufNoEcc,kvBufPatch,0x10);
+	// Copy the HMAC key
+	memcpy(kvPagesNoEcc,destKvHmacKey,0x10);
 
-	for( int i = 0; i<pageCount; i++ )
+	// Copy the KV pages to the destination
+	for(int i = 0; i < 0x20; i++)
 	{
-		// Copy only the page data
-		memcpy(&kvBufPatch[0x210 * i], &kvBufNoEcc[0x200 * i], 0x200);
+		// Copy just the data of the page
+		memcpy(&destKvPages[i * 0x210],&kvPagesNoEcc[i * 0x200],0x200);
 
-		// We need to recalculate the ECC
-		memset(&kvBufPatch[(0x210 * i) + 0x20C],0x0, 4); //zero only EDC bytes  
-		sfcx_calcecc((unsigned int *)&kvBufPatch[0x210 * i]); //recalc EDC bytes
+		// Zero out and recalculate the ECC bytes
+		memset(&destKvPages[(i * 0x210) + 0x20C],0,4);
+		sfcx_calcecc((unsigned int *)&destKvPages[i * 0x210]);
 	}
 
-	fseek(fd,kvOffsetPhys,SEEK_SET);
+	fseek(fd,0x4200,SEEK_SET);
 
-	if( fwrite(kvBufPatch,kvSizePhys,1,fd) < 0 )
-	{
-		dprintf("Error: Failed to write KV to patch image %d\n",errno);
-		fclose(fd);
-		return -1;
-	}
+	fwrite(destKvPages,0x4200,1,fd);
 
 	fclose(fd);
 
-	return rc;
+	return 0;
 }
 
 //--------------------------------------------------------------------------------------
