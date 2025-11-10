@@ -84,6 +84,34 @@ extern "C" {
 		IN		DWORD dwOrdinal,
 		IN		PVOID Address
 	);
+
+	NTSYSAPI
+	VOID
+	NTAPI
+	XeCryptHmacSha(
+		IN		const PBYTE pbKey,
+		IN		DWORD cbKey,
+		IN		const PBYTE pbInp1,
+		IN		DWORD cbInp1,
+		IN		const PBYTE pbInp2,
+		IN		DWORD cbInp2,
+		IN		const PBYTE pbInp3,
+		IN		DWORD cbInp3,
+		OUT		PBYTE pbOut,
+		IN		DWORD cbOut
+	);
+
+	NTSYSAPI
+	VOID
+	NTAPI
+	XeCryptRc4(
+		IN		const PBYTE pbKey,
+		IN		DWORD cbKey,
+		IN OUT	PBYTE pbInpOut,
+		IN		DWORD cbInpOut
+	);
+
+
 #ifdef __cplusplus
 }
 #endif
@@ -97,7 +125,7 @@ void PrintConsoleType();
 
 void PrintDLVersion();
 
-bool GetCPUKey();
+bool GetCPUKey(unsigned char * outKeyBuf);
 
 void PrintCPUKey();
 

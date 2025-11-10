@@ -74,7 +74,7 @@ void PrintDLVersion()
 		dprintf(MSG_DASHLAUNCH_NOT_RUNNING);
 }
 
-bool GetCPUKey()
+bool GetCPUKey(unsigned char * outKeyBuf)
 {
 	PBYTE buf = (PBYTE)XPhysicalAlloc(0x10, MAXULONG_PTR, 0, MEM_LARGE_PAGES|PAGE_READWRITE|PAGE_NOCACHE);
 	if (buf != NULL)
@@ -85,6 +85,12 @@ bool GetCPUKey()
 		if(ret == SYSCALL_KEY || ret == dest)
 		{
 			memcpy(keybuf, buf, 0x10);
+
+			if(NULL != outKeyBuf)
+			{
+				memcpy(outKeyBuf, buf, 0x10);
+			}
+
 			XPhysicalFree(buf);
 			return true;
 		}
