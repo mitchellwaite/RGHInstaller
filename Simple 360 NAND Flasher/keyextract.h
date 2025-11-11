@@ -129,4 +129,4 @@ bool GetCPUKey(unsigned char * outKeyBuf);
 
 void PrintCPUKey();
 
-void SaveCPUKey(const char* file);
+void SaveCPUKey(const char* file, unsigned char cpukey[0x10]);

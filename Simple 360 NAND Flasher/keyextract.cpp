@@ -118,7 +118,7 @@ void PrintCPUKey()
 #endif
 }
 
-void SaveCPUKey(const char* file)
+void SaveCPUKey(const char* file, unsigned char cpukey[0x10])
 {
 	FILE* fd;
 	fopen_s(&fd, file, "w");
@@ -126,7 +126,7 @@ void SaveCPUKey(const char* file)
 	{
 		int i;
 		for (i = 0; i < 0x10; i++)
-			fprintf(fd, "%02X", keybuf[i]);
+			fprintf(fd, "%02X", cpukey[i]);
 		fclose(fd);
 		//dprintf(MSG_CPUKEY_SUCCESSFULLY_SAVED, file);
 	}
